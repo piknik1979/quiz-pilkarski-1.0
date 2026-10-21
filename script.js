@@ -19,7 +19,7 @@ let realTimeChannel = null;
 let myMpNickname = 'Kibic';
 let isMultiplayerGame = false;
 let currentLbType = 'solo';
-let isOvertime = false; // Flaga dogrywki
+let isOvertime = false;
 
 // Bezpieczna inicjalizacja klienta Supabase
 if (!window.supabaseClient) {
@@ -691,7 +691,8 @@ if (!window.supabaseClient) {
     clearInterval(timer);
     showScreen(resultScreen);
     
-    let bonusText = `Odpowiedziałeś poprawnie na ${correctAnswersCount} z ${currentQuestions.length} pytań.`;
+    let totalQuestionsCount = currentQuestions.length;
+    let bonusText = `Odpowiedziałeś poprawnie na ${correctAnswersCount} z ${totalQuestionsCount} pytań (${Math.round((correctAnswersCount/totalQuestionsCount)*100)}% skuteczności).`;
   
     if (finalScoreText) finalScoreText.textContent = `Twój wynik końcowy: ${score}`;
 
@@ -753,22 +754,21 @@ if (!window.supabaseClient) {
             const oppCorrect = opponentRecord ? (opponentRecord.correct_count ?? 0) : 0;
             const oppName = opponentRecord ? escapeHtml(opponentRecord.player_name) : 'Przeciwnik';
 
+            let totalQ = currentQuestions.length || 10;
             let titleHtml = "";
             let messageHtml = "";
 
             // SPRAWDZENIE DOGRYWKI: 
-            // Jeśli przeciwnik ma mniej punktów, ale odpowiedział poprawnie na WIĘCEJ pytań -> Dogrywka!
-            // Albo odwrotnie: my mamy mniej punktów, ale więcej trafionych pytań.
+            // Jeśli jeden gracz ma mniej punktów, ale odpowiedział poprawnie na WIĘCEJ pytań -> Dogrywka!
             const needOvertime = (!isOvertime) && (
                 (myScore < oppScore && myCorrect > oppCorrect) || 
                 (myScore > oppScore && myCorrect < oppCorrect)
             );
 
             if (needOvertime) {
-                // Uruchamiamy dogrywkę!
                 isOvertime = true;
                 titleHtml = `<h2 style="color: #FF9800; font-size: 1.8rem; margin-bottom: 10px;">⚡ DOGRYWKA!</h2>`;
-                messageHtml = `Mimo mniejszej liczby punktów, przeciwnik trafił więcej pytań! Czas na dogrywkę decydującą o losach meczu! 🔥⚽`;
+                messageHtml = `Ty: <strong>${myScore} pkt</strong> (${myCorrect}/${totalQ} poprawnych) | <strong>${oppName}</strong>: <strong>${oppScore} pkt</strong> (${oppCorrect}/${totalQ} poprawnych).<br><br>Mimo różnicy punktowej, gracz z mniejszym wynikiem odpowiedział na więcej pytań! Decyduje dogrywka! 🔥⚽`;
                 
                 if (bonusInfoText) {
                     bonusInfoText.innerHTML = `
@@ -780,7 +780,6 @@ if (!window.supabaseClient) {
                     `;
                 }
 
-                // Podpięcie przycisku startu dogrywki
                 setTimeout(() => {
                     const otBtn = document.getElementById('start-overtime-btn');
                     if (otBtn) {
@@ -790,16 +789,16 @@ if (!window.supabaseClient) {
                 return;
             }
 
-            // Normalne rozstrzygnięcie (punkty rządzą)
+            // Normalne rozstrzygnięcie (z wyświetleniem dokładnego wyniku i trafy z pytań)
             if (myScore > oppScore || (players.length === 1 && myScore >= oppScore)) {
                 titleHtml = `<h2 style="color: #4CAF50; font-size: 1.8rem; margin-bottom: 10px;">🏆 ZWYCIĘSTWO!</h2>`;
-                messageHtml = `Niesamowity występ, <strong>${escapeHtml(myMpNickname)}</strong>! Pokonałeś <strong>${oppName}</strong> wynikiem <strong>${myScore} : ${oppScore}</strong>. Król boiska jest tylko jeden! 👑⚽`;
+                messageHtml = `Niesamowity występ, <strong>${escapeHtml(myMpNickname)}</strong>!<br>Pokonałeś <strong>${oppName}</strong>!<br><br>📊 <strong>Twój wynik:</strong> ${myScore} pkt (${myCorrect}/${totalQ} poprawnych)<br>📊 <strong>${oppName}:</strong> ${oppScore} pkt (${oppCorrect}/${totalQ} poprawnych)<br><br>Król boiska jest tylko jeden! 👑⚽`;
             } else if (myScore < oppScore) {
                 titleHtml = `<h2 style="color: #f44336; font-size: 1.8rem; margin-bottom: 10px;">😢 PORAŻKA!</h2>`;
-                messageHtml = `Niestety tym razem <strong>${oppName}</strong> okazał się lepszy i wygrał <strong>${oppScore} : ${myScore}</strong>. Nie poddawaj się, rewanż czeka! 🔥⚽`;
+                messageHtml = `Niestety tym razem <strong>${oppName}</strong> okazał się lepszy!<br><br>📊 <strong>Twój wynik:</strong> ${myScore} pkt (${myCorrect}/${totalQ} poprawnych)<br>📊 <strong>${oppName}:</strong> ${oppScore} pkt (${oppCorrect}/${totalQ} poprawnych)<br><br>Nie poddawaj się, rewanż czeka! 🔥⚽`;
             } else {
                 titleHtml = `<h2 style="color: #FFC107; font-size: 1.8rem; margin-bottom: 10px;">🤝 REMIS!</h2>`;
-                messageHtml = `Zacięty pojedynek! Obaj zdobyliście po <strong>${myScore} pkt</strong> w starciu z <strong>${oppName}</strong>. Prawdziwa walka cios za cios! ⚽`;
+                messageHtml = `Zacięty pojedynek z <strong>${oppName}</strong>!<br><br>Obaj zdobyliście po <strong>${myScore} pkt</strong> (Trafione pytania: Ty ${myCorrect}/${totalQ}, ${oppName} ${oppCorrect}/${totalQ}).<br>Prawdziwa walka cios za cios! ⚽`;
             }
 
             if (bonusInfoText) {
@@ -816,7 +815,7 @@ if (!window.supabaseClient) {
     }
   }
 
-  // Funkcja inicjująca rundę dogrywki (3 dodatkowe pytania)
+  // Inicjalizacja dogrywki (3 pytania)
   async function startOvertimeSession() {
     try {
         let { data: allData, error } = await supabaseClient
@@ -833,10 +832,9 @@ if (!window.supabaseClient) {
 
         currentQuestions = otQuestions;
         currentIndex = 0;
-        score = 0; // Reset punktów na dogrywkę
+        score = 0;
         correctAnswersCount = 0;
 
-        // Resetujemy status w bazie dla dogrywki
         await supabaseClient
             .from(CONFIG.SUPABASE_PLAYERS_TABLE)
             .update({ score: 0, correct_count: 0, has_answered: false })
