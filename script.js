@@ -19,6 +19,7 @@ let realTimeChannel = null;
 let myMpNickname = 'Kibic';
 let isMultiplayerGame = false;
 let currentLbType = 'solo';
+let isOvertime = false; // Flaga dogrywki
 
 // Bezpieczna inicjalizacja klienta Supabase
 if (!window.supabaseClient) {
@@ -129,7 +130,6 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Zakładki w rankingu
   if (tabSoloBtn) {
     tabSoloBtn.addEventListener('click', () => {
         currentLbType = 'solo';
@@ -167,7 +167,6 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Tworzenie pokoju (Stół)
   if (createRoomBtn) {
     createRoomBtn.addEventListener('click', async () => {
         myMpNickname = (mpNicknameInput ? mpNicknameInput.value.trim() : '') || 'Gospodarz';
@@ -191,7 +190,7 @@ if (!window.supabaseClient) {
 
             const { error: playerError } = await supabaseClient
                 .from(CONFIG.SUPABASE_PLAYERS_TABLE)
-                .insert([{ room_id: currentRoomId, player_name: myMpNickname, score: 0, has_answered: false }]);
+                .insert([{ room_id: currentRoomId, player_name: myMpNickname, score: 0, correct_count: 0, has_answered: false }]);
 
             if (playerError) throw playerError;
 
@@ -212,7 +211,6 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Dołączanie do stołu
   if (joinRoomBtn) {
     joinRoomBtn.addEventListener('click', async () => {
         myMpNickname = (mpNicknameInput ? mpNicknameInput.value.trim() : '') || 'Gość';
@@ -244,7 +242,7 @@ if (!window.supabaseClient) {
 
             const { error: playerError } = await supabaseClient
                 .from(CONFIG.SUPABASE_PLAYERS_TABLE)
-                .insert([{ room_id: currentRoomId, player_name: myMpNickname, score: 0, has_answered: false }]);
+                .insert([{ room_id: currentRoomId, player_name: myMpNickname, score: 0, correct_count: 0, has_answered: false }]);
 
             if (playerError) throw playerError;
 
@@ -265,7 +263,6 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Host startuje grę – pobiera pytania z pełną paginacją, losuje i zapisuje w bazie
   if (mpStartGameBtn) {
     mpStartGameBtn.addEventListener('click', async () => {
         mpStartGameBtn.disabled = true;
@@ -347,7 +344,7 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Supabase Realtime do obsługi lobby i synchronizacji
+  // Supabase Realtime - natychmiastowe aktualizowanie stanu graczy
   function subscribeToRoom(roomId) {
     if (realTimeChannel) {
         supabaseClient.removeChannel(realTimeChannel);
@@ -405,6 +402,7 @@ if (!window.supabaseClient) {
         }
 
         isMultiplayerGame = true;
+        isOvertime = false;
         currentQuestions = questions;
         currentIndex = 0;
         score = 0;
@@ -434,13 +432,15 @@ if (!window.supabaseClient) {
         currentRoomId = null;
         currentRoomCode = null;
         isMultiplayerGame = false;
+        isOvertime = false;
     }
   }
   
-  // --- START QUIZU (Tryb Solo - z pełną paginacją Supabase do 5000 rekordów) ---
+  // --- START QUIZU (Solo) ---
   if (startBtn) {
     startBtn.addEventListener('click', async () => {
         isMultiplayerGame = false;
+        isOvertime = false;
         startBtn.disabled = true;
         startBtn.textContent = 'Ładowanie pytań... ⚽';
   
@@ -449,8 +449,6 @@ if (!window.supabaseClient) {
                 throw new Error("Klient Supabase nie został zainicjalizowany.");
             }
 
-            console.log("Pobieranie pytań z tabeli:", CONFIG.SUPABASE_TABLE);
-            
             let allData = [];
             let from = 0;
             let step = 1000;
@@ -479,11 +477,8 @@ if (!window.supabaseClient) {
             }
 
             const data = allData;
-            console.log("Łączna liczba pobranych pytań z całej bazy:", data.length);
-
             if (!data || data.length === 0) {
-                console.warn('Tabela w bazie jest całkowicie pusta lub brak uprawnień!');
-                alert('Brak pytań w bazie danych! Sprawdź czy tabela istnieje.');
+                alert('Brak pytań w bazie danych!');
                 startBtn.disabled = false;
                 startBtn.textContent = 'Rozpocznij Quiz 🚀';
                 return;
@@ -494,12 +489,8 @@ if (!window.supabaseClient) {
                 availableData = data.filter(q => q.difficulty && q.difficulty.toLowerCase().trim() === selectedDifficulty.toLowerCase().trim());
             }
   
-            if (availableData.length === 0) {
-                console.warn(`Brak pytań dla wybranego poziomu (${selectedDifficulty}), używam wszystkich dostępnych.`);
-                availableData = data;
-            }
+            if (availableData.length === 0) availableData = data;
   
-            // --- INTELIGENTNE LOSOWANIE (Zapobieganie kumulacji tej samej kategorii) ---
             let shuffled = [...availableData].sort(() => Math.random() - 0.5);
             let selected = [];
             let categoriesUsed = {};
@@ -556,7 +547,7 @@ if (!window.supabaseClient) {
     updateTimerDisplay();
   
     const q = currentQuestions[currentIndex];
-    if (questionCounter) questionCounter.textContent = `Pytanie ${currentIndex + 1}/${currentQuestions.length}`;
+    if (questionCounter) questionCounter.textContent = isOvertime ? `Dogrywka Pytanie ${currentIndex + 1}/${currentQuestions.length}` : `Pytanie ${currentIndex + 1}/${currentQuestions.length}`;
     if (scoreDisplay) scoreDisplay.textContent = score;
     if (questionText) questionText.textContent = q.question;
   
@@ -674,7 +665,7 @@ if (!window.supabaseClient) {
     if (scoreDisplay) scoreDisplay.textContent = score;
 
     if (isMultiplayerGame && currentRoomId) {
-        updateMpPlayerScore(score);
+        updateMpPlayerStats(score, correctAnswersCount);
     }
   
     setTimeout(() => {
@@ -683,15 +674,15 @@ if (!window.supabaseClient) {
     }, 1200);
   }
 
-  async function updateMpPlayerScore(currentScore) {
+  async function updateMpPlayerStats(currentScore, currentCorrect) {
     try {
         await supabaseClient
             .from(CONFIG.SUPABASE_PLAYERS_TABLE)
-            .update({ score: currentScore })
+            .update({ score: currentScore, correct_count: currentCorrect })
             .eq('room_id', currentRoomId)
             .eq('player_name', myMpNickname);
     } catch (err) {
-        console.error('Błąd aktualizacji wyniku w grze:', err);
+        console.error('Błąd aktualizacji statystyk w grze:', err);
     }
   }
   
@@ -712,20 +703,21 @@ if (!window.supabaseClient) {
         try {
             await supabaseClient
                 .from(CONFIG.SUPABASE_PLAYERS_TABLE)
-                .update({ score: score, has_answered: true })
+                .update({ score: score, correct_count: correctAnswersCount, has_answered: true })
                 .eq('room_id', currentRoomId)
                 .eq('player_name', myMpNickname);
 
-            await supabaseClient
-                .from(CONFIG.SUPABASE_MP_SCORES_TABLE)
-                .insert([{ room_id: currentRoomId, nickname: myMpNickname, score: score, device_id: deviceId }]);
-
+            if (!isOvertime) {
+                await supabaseClient
+                    .from(CONFIG.SUPABASE_MP_SCORES_TABLE)
+                    .insert([{ room_id: currentRoomId, nickname: myMpNickname, score: score, device_id: deviceId }]);
+            }
         } catch (err) {
             console.error('Błąd zapisu końca gry w MP:', err);
         }
 
         if (bonusInfoText) {
-            bonusInfoText.innerHTML = `${bonusText}<br><br>⏳ <em>Czekamy, aż przeciwnik dokończy quiz...</em>`;
+            bonusInfoText.innerHTML = `${bonusText}<br><br>⏳ <em>Czekamy na drugiego gracza (Live Update)...</em>`;
         }
 
         checkIfAllFinished();
@@ -736,6 +728,7 @@ if (!window.supabaseClient) {
     }
   }
 
+  // Sprawdzanie czy obaj gracze skończyli, rozstrzyganie wygranej oraz dogrywki
   async function checkIfAllFinished() {
     if (!currentRoomId) return;
 
@@ -750,17 +743,55 @@ if (!window.supabaseClient) {
         const allFinished = players.length >= 2 && players.every(p => p.has_answered === true);
 
         if (allFinished) {
-            const myRecord = players.find(p => p.player_name === myMpNickname) || { score: score };
+            const myRecord = players.find(p => p.player_name === myMpNickname) || { score: score, correct_count: correctAnswersCount };
             const opponentRecord = players.find(p => p.player_name !== myMpNickname);
 
             const myScore = myRecord.score;
+            const myCorrect = myRecord.correct_count ?? correctAnswersCount;
+            
             const oppScore = opponentRecord ? opponentRecord.score : 0;
+            const oppCorrect = opponentRecord ? (opponentRecord.correct_count ?? 0) : 0;
             const oppName = opponentRecord ? escapeHtml(opponentRecord.player_name) : 'Przeciwnik';
 
             let titleHtml = "";
             let messageHtml = "";
 
-            if (myScore > oppScore) {
+            // SPRAWDZENIE DOGRYWKI: 
+            // Jeśli przeciwnik ma mniej punktów, ale odpowiedział poprawnie na WIĘCEJ pytań -> Dogrywka!
+            // Albo odwrotnie: my mamy mniej punktów, ale więcej trafionych pytań.
+            const needOvertime = (!isOvertime) && (
+                (myScore < oppScore && myCorrect > oppCorrect) || 
+                (myScore > oppScore && myCorrect < oppCorrect)
+            );
+
+            if (needOvertime) {
+                // Uruchamiamy dogrywkę!
+                isOvertime = true;
+                titleHtml = `<h2 style="color: #FF9800; font-size: 1.8rem; margin-bottom: 10px;">⚡ DOGRYWKA!</h2>`;
+                messageHtml = `Mimo mniejszej liczby punktów, przeciwnik trafił więcej pytań! Czas na dogrywkę decydującą o losach meczu! 🔥⚽`;
+                
+                if (bonusInfoText) {
+                    bonusInfoText.innerHTML = `
+                        <div style="background: rgba(255,152,0,0.1); padding: 15px; border-radius: 10px; margin-top: 10px; border: 1px solid #FF9800;">
+                            ${titleHtml}
+                            <p style="font-size: 1.05rem; line-height: 1.4;">${messageHtml}</p>
+                            <button id="start-overtime-btn" class="primary-btn" style="margin-top: 15px;">Rozpocznij Dogrywkę! ⚡</button>
+                        </div>
+                    `;
+                }
+
+                // Podpięcie przycisku startu dogrywki
+                setTimeout(() => {
+                    const otBtn = document.getElementById('start-overtime-btn');
+                    if (otBtn) {
+                        otBtn.addEventListener('click', () => startOvertimeSession());
+                    }
+                }, 100);
+                return;
+            }
+
+            // Normalne rozstrzygnięcie (punkty rządzą)
+            if (myScore > oppScore || (players.length === 1 && myScore >= oppScore)) {
                 titleHtml = `<h2 style="color: #4CAF50; font-size: 1.8rem; margin-bottom: 10px;">🏆 ZWYCIĘSTWO!</h2>`;
                 messageHtml = `Niesamowity występ, <strong>${escapeHtml(myMpNickname)}</strong>! Pokonałeś <strong>${oppName}</strong> wynikiem <strong>${myScore} : ${oppScore}</strong>. Król boiska jest tylko jeden! 👑⚽`;
             } else if (myScore < oppScore) {
@@ -782,6 +813,41 @@ if (!window.supabaseClient) {
         }
     } catch (err) {
         console.error('Błąd weryfikacji końca meczu:', err);
+    }
+  }
+
+  // Funkcja inicjująca rundę dogrywki (3 dodatkowe pytania)
+  async function startOvertimeSession() {
+    try {
+        let { data: allData, error } = await supabaseClient
+            .from(CONFIG.SUPABASE_TABLE)
+            .select('*')
+            .limit(50);
+
+        if (error || !allData || allData.length === 0) {
+            alert('Błąd pobierania pytań do dogrywki.');
+            return;
+        }
+
+        let otQuestions = [...allData].sort(() => Math.random() - 0.5).slice(0, 3);
+
+        currentQuestions = otQuestions;
+        currentIndex = 0;
+        score = 0; // Reset punktów na dogrywkę
+        correctAnswersCount = 0;
+
+        // Resetujemy status w bazie dla dogrywki
+        await supabaseClient
+            .from(CONFIG.SUPABASE_PLAYERS_TABLE)
+            .update({ score: 0, correct_count: 0, has_answered: false })
+            .eq('room_id', currentRoomId)
+            .eq('player_name', myMpNickname);
+
+        showScreen(quizScreen);
+        nextQuestion();
+
+    } catch (err) {
+        console.error('Błąd startu dogrywki:', err);
     }
   }
   
@@ -830,6 +896,7 @@ if (!window.supabaseClient) {
   if (backToStartBtn) {
     backToStartBtn.addEventListener('click', () => {
         isMultiplayerGame = false;
+        isOvertime = false;
         showScreen(startScreen);
     });
   }
@@ -837,6 +904,7 @@ if (!window.supabaseClient) {
   if (restartBtn) {
     restartBtn.addEventListener('click', () => {
         isMultiplayerGame = false;
+        isOvertime = false;
         showScreen(startScreen);
     });
   }
