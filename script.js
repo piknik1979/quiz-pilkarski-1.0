@@ -1,3 +1,24 @@
+// --- ZMIENNE I ELEMENTY MULTIPLAYER ---
+const mpMenuScreen = document.getElementById('mp-menu-screen');
+const mpLobbyScreen = document.getElementById('mp-lobby-screen');
+const multiplayerMenuBtn = document.getElementById('multiplayer-menu-btn');
+const createRoomBtn = document.getElementById('create-room-btn');
+const joinRoomBtn = document.getElementById('join-room-btn');
+const mpBackBtn = document.getElementById('mp-back-btn');
+const mpLeaveBtn = document.getElementById('mp-leave-btn');
+const mpStartGameBtn = document.getElementById('mp-start-game-btn');
+const mpNicknameInput = document.getElementById('mp-nickname');
+const roomCodeInput = document.getElementById('room-code-input');
+const displayRoomCode = document.getElementById('display-room-code');
+const mpPlayersList = document.getElementById('mp-players-list');
+
+let currentRoomId = null;
+let currentRoomCode = null;
+let isHost = false;
+let realTimeChannel = null;
+let myMpNickname = 'Kibic'; // Przechowywany nick z multiplayer
+let isMultiplayerGame = false; // Flaga określająca tryb gry
+
 // Bezpieczna inicjalizacja klienta Supabase
 if (!window.supabaseClient) {
     window.supabaseClient = window.supabase.createClient(
@@ -79,14 +100,17 @@ if (!window.supabaseClient) {
   
   // --- NAWIGACJA MIĘDZY EKRANAMI ---
   function showScreen(screen) {
-    [startScreen, quizScreen, resultScreen, leaderboardScreen].forEach(s => {
+    [startScreen, quizScreen, resultScreen, leaderboardScreen, mpMenuScreen, mpLobbyScreen].forEach(s => {
         if (s) s.classList.remove('active');
     });
     if (screen) screen.classList.add('active');
   }
   
   if (navHome) {
-    navHome.addEventListener('click', () => showScreen(startScreen));
+    navHome.addEventListener('click', () => {
+        isMultiplayerGame = false;
+        showScreen(startScreen);
+    });
   }
   if (navLeaderboard) {
     navLeaderboard.addEventListener('click', () => {
@@ -94,10 +118,296 @@ if (!window.supabaseClient) {
         showScreen(leaderboardScreen);
     });
   }
+
+  // --- OBSŁUGA MENU MULTIPLAYER ---
+  if (multiplayerMenuBtn) {
+    multiplayerMenuBtn.addEventListener('click', () => {
+        showScreen(mpMenuScreen);
+    });
+  }
+  if (mpBackBtn) {
+    mpBackBtn.addEventListener('click', () => {
+        showScreen(startScreen);
+    });
+  }
+  if (mpLeaveBtn) {
+    mpLeaveBtn.addEventListener('click', () => {
+        leaveRoom();
+        showScreen(startScreen);
+    });
+  }
+
+  // Tworzenie pokoju (Stół)
+  if (createRoomBtn) {
+    createRoomBtn.addEventListener('click', async () => {
+        myMpNickname = (mpNicknameInput ? mpNicknameInput.value.trim() : '') || 'Gospodarz';
+        const roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+
+        createRoomBtn.disabled = true;
+        createRoomBtn.textContent = 'Tworzenie...';
+
+        try {
+            const { data: roomData, error: roomError } = await supabaseClient
+                .from(CONFIG.SUPABASE_ROOMS_TABLE)
+                .insert([{ room_code: roomCode, host_id: deviceId, status: 'waiting' }])
+                .select()
+                .single();
+
+            if (roomError) throw roomError;
+
+            currentRoomId = roomData.id;
+            currentRoomCode = roomCode;
+            isHost = true;
+
+            const { error: playerError } = await supabaseClient
+                .from(CONFIG.SUPABASE_PLAYERS_TABLE)
+                .insert([{ room_id: currentRoomId, player_name: myMpNickname, score: 0 }]);
+
+            if (playerError) throw playerError;
+
+            if (displayRoomCode) displayRoomCode.textContent = roomCode;
+            if (mpStartGameBtn) mpStartGameBtn.style.display = 'block';
+            
+            showScreen(mpLobbyScreen);
+            subscribeToRoom(currentRoomId);
+            fetchRoomPlayers();
+
+        } catch (err) {
+            console.error('Błąd tworzenia pokoju:', err);
+            alert('Nie udało się utworzyć stołu.');
+        } finally {
+            createRoomBtn.disabled = false;
+            createRoomBtn.textContent = 'Stwórz stół 🏠';
+        }
+    });
+  }
+
+  // Dołączanie do stołu
+  if (joinRoomBtn) {
+    joinRoomBtn.addEventListener('click', async () => {
+        myMpNickname = (mpNicknameInput ? mpNicknameInput.value.trim() : '') || 'Gość';
+        const code = roomCodeInput ? roomCodeInput.value.trim().toUpperCase() : '';
+
+        if (!code) {
+            alert('Wpisz kod stołu!');
+            return;
+        }
+
+        joinRoomBtn.disabled = true;
+        joinRoomBtn.textContent = 'Dołączanie...';
+
+        try {
+            const { data: roomData, error: roomError } = await supabaseClient
+                .from(CONFIG.SUPABASE_ROOMS_TABLE)
+                .select('*')
+                .eq('room_code', code)
+                .single();
+
+            if (roomError || !roomData) {
+                alert('Nie znaleziono takiego stołu!');
+                return;
+            }
+
+            currentRoomId = roomData.id;
+            currentRoomCode = roomData.room_code;
+            isHost = false;
+
+            const { error: playerError } = await supabaseClient
+                .from(CONFIG.SUPABASE_PLAYERS_TABLE)
+                .insert([{ room_id: currentRoomId, player_name: myMpNickname, score: 0 }]);
+
+            if (playerError) throw playerError;
+
+            if (displayRoomCode) displayRoomCode.textContent = currentRoomCode;
+            if (mpStartGameBtn) mpStartGameBtn.style.display = 'none';
+            
+            showScreen(mpLobbyScreen);
+            subscribeToRoom(currentRoomId);
+            fetchRoomPlayers();
+
+        } catch (err) {
+            console.error('Błąd dołączania do pokoju:', err);
+            alert('Nie udało się dołączyć do stołu.');
+        } finally {
+            joinRoomBtn.disabled = false;
+            joinRoomBtn.textContent = 'Dołącz do stołu 🚀';
+        }
+    });
+  }
+
+  // Host startuje grę – losuje i zapisuje pytania w bazie dla obu graczy
+  if (mpStartGameBtn) {
+    mpStartGameBtn.addEventListener('click', async () => {
+        mpStartGameBtn.disabled = true;
+        mpStartGameBtn.textContent = 'Losowanie pytań i start...';
+
+        try {
+            let allData = [];
+            let from = 0;
+            let step = 1000;
+            let keepFetching = true;
+
+            while (keepFetching) {
+                const { data: chunkData, error } = await supabaseClient
+                    .from(CONFIG.SUPABASE_TABLE)
+                    .select('*')
+                    .range(from, from + step - 1);
+            
+                if (error) throw error;
+                if (chunkData && chunkData.length > 0) {
+                    allData = allData.concat(chunkData);
+                    if (chunkData.length < step) keepFetching = false;
+                    else from += step;
+                } else {
+                    keepFetching = false;
+                }
+                if (from >= 5000) keepFetching = false;
+            }
+
+            if (!allData || allData.length === 0) {
+                alert('Brak pytań w bazie!');
+                mpStartGameBtn.disabled = false;
+                mpStartGameBtn.textContent = 'Start Gry! 🚀';
+                return;
+            }
+
+            let availableData = allData;
+            if (selectedDifficulty !== 'mix') {
+                availableData = allData.filter(q => q.difficulty && q.difficulty.toLowerCase().trim() === selectedDifficulty.toLowerCase().trim());
+            }
+            if (availableData.length === 0) availableData = allData;
+
+            let shuffled = [...availableData].sort(() => Math.random() - 0.5);
+            let selected = [];
+            let categoriesUsed = {};
+
+            for (let q of shuffled) {
+                let cat = q.category || 'Inne';
+                if (!categoriesUsed[cat]) categoriesUsed[cat] = 0;
+                if (categoriesUsed[cat] < 2 || selected.length >= 8) {
+                    selected.push(q);
+                    categoriesUsed[cat]++;
+                }
+                if (selected.length === 10) break;
+            }
+
+            if (selected.length < 10) {
+                let remaining = shuffled.filter(q => !selected.includes(q));
+                selected = selected.concat(remaining.slice(0, 10 - selected.length));
+            }
+
+            let selectedQuestions = selected.sort(() => Math.random() - 0.5);
+
+            const { error: updateError } = await supabaseClient
+                .from(CONFIG.SUPABASE_ROOMS_TABLE)
+                .update({ 
+                    status: 'in_progress',
+                    questions: selectedQuestions 
+                })
+                .eq('id', currentRoomId);
+
+            if (updateError) throw updateError;
+
+        } catch (err) {
+            console.error('Błąd startu gry w multiplayer:', err);
+            alert('Nie udało się wystartować gry.');
+            mpStartGameBtn.disabled = false;
+            mpStartGameBtn.textContent = 'Start Gry! 🚀';
+        }
+    });
+  }
+
+  // Supabase Realtime do obsługi lobby i synchronizacji pytań
+  function subscribeToRoom(roomId) {
+    if (realTimeChannel) {
+        supabaseClient.removeChannel(realTimeChannel);
+    }
+
+    realTimeChannel = supabaseClient
+        .channel(`room_${roomId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: CONFIG.SUPABASE_PLAYERS_TABLE, filter: `room_id=eq.${roomId}` }, () => {
+            fetchRoomPlayers();
+        })
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: CONFIG.SUPABASE_ROOMS_TABLE, filter: `id=eq.${roomId}` }, (payload) => {
+            if (payload.new.status === 'in_progress') {
+                startMultiplayerGameSession(payload.new);
+            }
+        })
+        .subscribe();
+  }
+
+  async function fetchRoomPlayers() {
+    if (!mpPlayersList) return;
+    const { data, error } = await supabaseClient
+        .from(CONFIG.SUPABASE_PLAYERS_TABLE)
+        .select('*')
+        .eq('room_id', currentRoomId);
+
+    if (!error && data) {
+        mpPlayersList.innerHTML = '<h3>Gracze przy stole:</h3>';
+        data.forEach(p => {
+            mpPlayersList.innerHTML += `<p>👤 ${escapeHtml(p.player_name)} (Wynik: ${p.score})</p>`;
+        });
+    }
+  }
+
+  async function startMultiplayerGameSession(roomData) {
+    try {
+        let questions = roomData ? roomData.questions : null;
+
+        if (!questions || questions.length === 0) {
+            const { data, error } = await supabaseClient
+                .from(CONFIG.SUPABASE_ROOMS_TABLE)
+                .select('questions')
+                .eq('id', currentRoomId)
+                .single();
+            
+            if (error) throw error;
+            questions = data.questions;
+        }
+
+        if (!questions || questions.length === 0) {
+            alert('Błąd synchronizacji pytań.');
+            return;
+        }
+
+        isMultiplayerGame = true; // Oznaczamy tryb multiplayer
+        currentQuestions = questions;
+        currentIndex = 0;
+        score = 0;
+        correctAnswersCount = 0;
+
+        showScreen(quizScreen);
+        nextQuestion();
+
+    } catch (err) {
+        console.error('Błąd uruchamiania sesji multiplayer:', err);
+        alert('Nie udało się rozpocząć gry.');
+    }
+  }
+
+  async function leaveRoom() {
+    if (currentRoomId) {
+        await supabaseClient
+            .from(CONFIG.SUPABASE_PLAYERS_TABLE)
+            .delete()
+            .eq('room_id', currentRoomId)
+            .eq('device_id', deviceId);
+        
+        if (realTimeChannel) {
+            supabaseClient.removeChannel(realTimeChannel);
+            realTimeChannel = null;
+        }
+        currentRoomId = null;
+        currentRoomCode = null;
+        isMultiplayerGame = false;
+    }
+  }
   
-  // --- START QUIZU (Pobieranie pytań z Supabase z pełną paginacją) ---
+  // --- START QUIZU (Pobieranie pytań z Supabase dla trybu Solo) ---
   if (startBtn) {
     startBtn.addEventListener('click', async () => {
+        isMultiplayerGame = false;
         startBtn.disabled = true;
         startBtn.textContent = 'Ładowanie pytań... ⚽';
   
@@ -106,15 +416,13 @@ if (!window.supabaseClient) {
                 throw new Error("Klient Supabase nie został zainicjalizowany.");
             }
 
-            console.log("Pobieranie pytań z tabeli:", CONFIG.SUPABASE_TABLE);
-            
             let allData = [];
             let from = 0;
             let step = 1000;
             let keepFetching = true;
 
             while (keepFetching) {
-                const { data: chunkData, error, status } = await supabaseClient
+                const { data: chunkData, error } = await supabaseClient
                     .from(CONFIG.SUPABASE_TABLE)
                     .select('*')
                     .range(from, from + step - 1);
@@ -132,15 +440,12 @@ if (!window.supabaseClient) {
                     keepFetching = false;
                 }
                 
-                if (from >= 5000) keepFetching = false; // Bezpiecznik limitu
+                if (from >= 5000) keepFetching = false;
             }
 
             const data = allData;
-            console.log("Łączna liczba pobranych pytań z całej bazy:", data.length);
-
             if (!data || data.length === 0) {
-                console.warn('Tabela w bazie jest całkowicie pusta lub brak uprawnień!');
-                alert('Brak pytań w bazie danych! Sprawdź czy tabela istnieje.');
+                alert('Brak pytań w bazie danych!');
                 startBtn.disabled = false;
                 startBtn.textContent = 'Rozpocznij Quiz 🚀';
                 return;
@@ -151,12 +456,8 @@ if (!window.supabaseClient) {
                 availableData = data.filter(q => q.difficulty && q.difficulty.toLowerCase().trim() === selectedDifficulty.toLowerCase().trim());
             }
   
-            if (availableData.length === 0) {
-                console.warn(`Brak pytań dla wybranego poziomu (${selectedDifficulty}), używam wszystkich dostępnych.`);
-                availableData = data;
-            }
+            if (availableData.length === 0) availableData = data;
   
-            // --- INTELIGENTNE LOSOWANIE (Zapobieganie kumulacji tej samej kategorii) ---
             let shuffled = [...availableData].sort(() => Math.random() - 0.5);
             let selected = [];
             let categoriesUsed = {};
@@ -165,7 +466,6 @@ if (!window.supabaseClient) {
                 let cat = q.category || 'Inne';
                 if (!categoriesUsed[cat]) categoriesUsed[cat] = 0;
                 
-                // Pozwól na maksymalnie 2 pytania z tej samej kategorii w jednym quizie
                 if (categoriesUsed[cat] < 2 || selected.length >= 8) {
                     selected.push(q);
                     categoriesUsed[cat]++;
@@ -174,7 +474,6 @@ if (!window.supabaseClient) {
                 if (selected.length === 10) break;
             }
 
-            // Jeśli zabrakło unikalnych, dobierz cokolwiek do 10
             if (selected.length < 10) {
                 let remaining = shuffled.filter(q => !selected.includes(q));
                 selected = selected.concat(remaining.slice(0, 10 - selected.length));
@@ -252,7 +551,6 @@ if (!window.supabaseClient) {
           return;
       }
   
-      // --- LOSOWANIE KOLEJNOŚCI ODPOWIEDZI ---
       const correctOptionText = options[q.correct_index];
       const shuffledOptions = [...options].sort(() => Math.random() - 0.5);
       const newCorrectIndex = shuffledOptions.indexOf(correctOptionText);
@@ -332,15 +630,32 @@ if (!window.supabaseClient) {
     }
   
     if (scoreDisplay) scoreDisplay.textContent = score;
+
+    // Jeśli to tryb multiplayer, możemy aktualizować wynik gracza na bieżąco w bazie
+    if (isMultiplayerGame && currentRoomId) {
+        updateMpPlayerScore(score);
+    }
   
     setTimeout(() => {
         currentIndex++;
         nextQuestion();
     }, 1200);
   }
+
+  async function updateMpPlayerScore(currentScore) {
+    try {
+        await supabaseClient
+            .from(CONFIG.SUPABASE_PLAYERS_TABLE)
+            .update({ score: currentScore })
+            .eq('room_id', currentRoomId)
+            .eq('player_name', myMpNickname);
+    } catch (err) {
+        console.error('Błąd aktualizacji wyniku w grze:', err);
+    }
+  }
   
   // --- KONIEC QUIZU ---
-  function endQuiz() {
+  async function endQuiz() {
     clearInterval(timer);
     showScreen(resultScreen);
     
@@ -348,9 +663,38 @@ if (!window.supabaseClient) {
   
     if (finalScoreText) finalScoreText.textContent = `Twój wynik końcowy: ${score}`;
     if (bonusInfoText) bonusInfoText.textContent = bonusText;
+
+    // Obsługa końca gry w trybie Multiplayer (automatyczny zapis bez pytania o nick)
+    if (isMultiplayerGame) {
+        const saveSection = document.querySelector('.save-score-section');
+        if (saveSection) saveSection.style.display = 'none'; // Ukrywamy pole wpisywania nicku
+
+        if (bonusInfoText) {
+            bonusInfoText.textContent = bonusText + " 🎮 (Wynik zapisany w tabeli pokoju!)";
+        }
+
+        try {
+            // Zapisujemy wynik do osobnej tabeli rankingowej multiplayer
+            await supabaseClient
+                .from(CONFIG.SUPABASE_MP_SCORES_TABLE)
+                .insert([
+                    {
+                        room_id: currentRoomId,
+                        nickname: myMpNickname,
+                        score: score,
+                        device_id: deviceId
+                    }
+                ]);
+        } catch (err) {
+            console.error('Błąd zapisu wyniku multiplayer:', err);
+        }
+    } else {
+        const saveSection = document.querySelector('.save-score-section');
+        if (saveSection) saveSection.style.display = 'block';
+    }
   }
   
-  // --- ZAPIS WYNIKU DO SUPABASE ---
+  // --- ZAPIS WYNIKU DO SUPABASE (Tryb Solo) ---
   if (saveScoreBtn) {
     saveScoreBtn.addEventListener('click', async () => {
         const nickname = (playerNickname ? playerNickname.value.trim() : '') || 'Kibic';
@@ -393,12 +737,14 @@ if (!window.supabaseClient) {
   
   if (backToStartBtn) {
     backToStartBtn.addEventListener('click', () => {
+        isMultiplayerGame = false;
         showScreen(startScreen);
     });
   }
   
   if (restartBtn) {
     restartBtn.addEventListener('click', () => {
+        isMultiplayerGame = false;
         showScreen(startScreen);
     });
   }

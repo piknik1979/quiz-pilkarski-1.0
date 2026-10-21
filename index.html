@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html lang="pl" data-theme="dark">
+
 <head>
-    <meta charset="UTF-8">  
+    <meta charset="UTF-8">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -10,7 +11,7 @@
     <link rel="stylesheet" href="style.css">
     <link rel="manifest" href="manifest.json">
     <!-- Supabase JS Client -->
-    
+
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="config.js"></script>
     <div class="quiz-container">
@@ -26,10 +27,12 @@
                 <div class="difficulty-selector">
                     <p>Wybierz poziom trudności:</p>
                     <div class="diff-buttons">
+                        <button id="multiplayer-menu-btn" class="secondary-btn">Tryb Multiplayer 🎮</button>
                         <button class="diff-btn active" data-diff="mix">Wszystkie 🎲</button>
                         <button class="diff-btn" data-diff="easy">Łatwy 🍺</button>
                         <button class="diff-btn" data-diff="medium">Średni 🍻</button>
                         <button class="diff-btn" data-diff="hard">Trudny 🍻🔥</button>
+
                     </div>
                 </div>
 
@@ -63,7 +66,37 @@
                 <!-- Odpowiedzi generowane dynamicznie -->
             </div>
         </div>
+        <!-- EKRAN MENU MULTIPLAYER (Stwórz / Dołącz) -->
+        <div id="mp-menu-screen" class="screen">
+            <div class="welcome-box">
+                <h2>🎮 Tryb Multiplayer</h2>
+                <input type="text" id="mp-nickname" placeholder="Twój nick..." maxlength="15">
+                <button id="create-room-btn" class="primary-btn">Stwórz stół 🏠</button>
 
+                <div style="margin: 20px 0; border-top: 1px solid #444; padding-top: 20px;">
+                    <input type="text" id="room-code-input" placeholder="Wpisz kod stołu (np. A1B2)" maxlength="6">
+                    <button id="join-room-btn" class="secondary-btn">Dołącz do stołu 🚀</button>
+                </div>
+
+                <button id="mp-back-btn" class="secondary-btn" style="margin-top: 20px;">Powrót 🏠</button>
+            </div>
+        </div>
+
+        <!-- EKRAN LOBBY / CZEKANIAN NA GRACZA -->
+        <div id="mp-lobby-screen" class="screen">
+            <div class="welcome-box">
+                <h2>Czekamy na przeciwnika... ⏳</h2>
+                <p>Kod Twojego stołu:</p>
+                <h1 id="display-room-code" style="letter-spacing: 4px; color: #4CAF50;">----</h1>
+
+                <div id="mp-players-list" style="margin: 20px 0; text-align: left;">
+                    <!-- Lista graczy w pokoju -->
+                </div>
+
+                <button id="mp-start-game-btn" class="primary-btn" style="display: none;">Start Gry! 🚀</button>
+                <button id="mp-leave-btn" class="secondary-btn">Wyjdź 🚪</button>
+            </div>
+        </div>
         <!-- EKRAN WYNIKÓW -->
         <div id="result-screen" class="screen">
             <div class="result-box">
@@ -83,7 +116,7 @@
         <!-- EKRAN RANKINGU (LEADERBOARD) -->
         <div id="leaderboard-screen" class="screen">
             <h2>🏆 Tabela Wyników</h2>
-            
+
             <!-- Przyciski filtrowania -->
             <div class="filter-buttons">
                 <button class="filter-btn active" data-filter="all">Wszystkie</button>
@@ -113,5 +146,6 @@
     </div>
 
     <script src="script.js"></script>
-</body>
+    </body>
+
 </html>
