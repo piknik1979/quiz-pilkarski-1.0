@@ -16,8 +16,9 @@ let currentRoomId = null;
 let currentRoomCode = null;
 let isHost = false;
 let realTimeChannel = null;
-let myMpNickname = 'Kibic'; // Przechowywany nick z multiplayer
-let isMultiplayerGame = false; // Flaga określająca tryb gry
+let myMpNickname = 'Kibic';
+let isMultiplayerGame = false;
+let currentLbType = 'solo'; // 'solo' lub 'mp'
 
 // Bezpieczna inicjalizacja klienta Supabase
 if (!window.supabaseClient) {
@@ -57,6 +58,11 @@ if (!window.supabaseClient) {
   const saveScoreBtn = document.getElementById('save-score-btn');
   const themeToggle = document.getElementById('theme-toggle-btn') || document.getElementById('theme-toggle');
   
+  // Zakładki rankingu
+  const tabSoloBtn = document.getElementById('tab-solo-btn');
+  const tabMpBtn = document.getElementById('tab-mp-btn');
+  const soloFilters = document.getElementById('solo-filters');
+
   // Dolna nawigacja
   const navHome = document.getElementById('nav-home');
   const navLeaderboard = document.getElementById('nav-leaderboard');
@@ -114,8 +120,32 @@ if (!window.supabaseClient) {
   }
   if (navLeaderboard) {
     navLeaderboard.addEventListener('click', () => {
+        currentLbType = 'solo';
+        if (tabSoloBtn) tabSoloBtn.classList.add('active');
+        if (tabMpBtn) tabMpBtn.classList.remove('active');
+        if (soloFilters) soloFilters.style.display = 'flex';
         loadLeaderboard('all');
         showScreen(leaderboardScreen);
+    });
+  }
+
+  // Zakładki w rankingu
+  if (tabSoloBtn) {
+    tabSoloBtn.addEventListener('click', () => {
+        currentLbType = 'solo';
+        tabSoloBtn.classList.add('active');
+        tabMpBtn.classList.remove('active');
+        if (soloFilters) soloFilters.style.display = 'flex';
+        loadLeaderboard('all');
+    });
+  }
+  if (tabMpBtn) {
+    tabMpBtn.addEventListener('click', () => {
+        currentLbType = 'mp';
+        tabMpBtn.classList.add('active');
+        tabSoloBtn.classList.remove('active');
+        if (soloFilters) soloFilters.style.display = 'none';
+        loadMpLeaderboard();
     });
   }
 
@@ -137,7 +167,6 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Tworzenie pokoju (Stół)
   if (createRoomBtn) {
     createRoomBtn.addEventListener('click', async () => {
         myMpNickname = (mpNicknameInput ? mpNicknameInput.value.trim() : '') || 'Gospodarz';
@@ -182,7 +211,6 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Dołączanie do stołu
   if (joinRoomBtn) {
     joinRoomBtn.addEventListener('click', async () => {
         myMpNickname = (mpNicknameInput ? mpNicknameInput.value.trim() : '') || 'Gość';
@@ -235,7 +263,6 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Host startuje grę – losuje i zapisuje pytania w bazie dla obu graczy
   if (mpStartGameBtn) {
     mpStartGameBtn.addEventListener('click', async () => {
         mpStartGameBtn.disabled = true;
@@ -317,7 +344,6 @@ if (!window.supabaseClient) {
     });
   }
 
-  // Supabase Realtime do obsługi lobby i synchronizacji pytań
   function subscribeToRoom(roomId) {
     if (realTimeChannel) {
         supabaseClient.removeChannel(realTimeChannel);
@@ -371,7 +397,7 @@ if (!window.supabaseClient) {
             return;
         }
 
-        isMultiplayerGame = true; // Oznaczamy tryb multiplayer
+        isMultiplayerGame = true;
         currentQuestions = questions;
         currentIndex = 0;
         score = 0;
@@ -404,7 +430,7 @@ if (!window.supabaseClient) {
     }
   }
   
-  // --- START QUIZU (Pobieranie pytań z Supabase dla trybu Solo) ---
+  // --- START QUIZU (Solo) ---
   if (startBtn) {
     startBtn.addEventListener('click', async () => {
         isMultiplayerGame = false;
@@ -631,7 +657,6 @@ if (!window.supabaseClient) {
   
     if (scoreDisplay) scoreDisplay.textContent = score;
 
-    // Jeśli to tryb multiplayer, możemy aktualizować wynik gracza na bieżąco w bazie
     if (isMultiplayerGame && currentRoomId) {
         updateMpPlayerScore(score);
     }
@@ -662,39 +687,56 @@ if (!window.supabaseClient) {
     let bonusText = `Odpowiedziałeś poprawnie na ${correctAnswersCount} z ${currentQuestions.length} pytań.`;
   
     if (finalScoreText) finalScoreText.textContent = `Twój wynik końcowy: ${score}`;
-    if (bonusInfoText) bonusInfoText.textContent = bonusText;
 
-    // Obsługa końca gry w trybie Multiplayer (automatyczny zapis bez pytania o nick)
+    const saveSection = document.querySelector('.save-score-section');
+
     if (isMultiplayerGame) {
-        const saveSection = document.querySelector('.save-score-section');
-        if (saveSection) saveSection.style.display = 'none'; // Ukrywamy pole wpisywania nicku
-
-        if (bonusInfoText) {
-            bonusInfoText.textContent = bonusText + " 🎮 (Wynik zapisany w tabeli pokoju!)";
-        }
+        if (saveSection) saveSection.style.display = 'none';
 
         try {
-            // Zapisujemy wynik do osobnej tabeli rankingowej multiplayer
+            // 1. Zapisz wynik w tabeli MP scores
             await supabaseClient
                 .from(CONFIG.SUPABASE_MP_SCORES_TABLE)
-                .insert([
-                    {
-                        room_id: currentRoomId,
-                        nickname: myMpNickname,
-                        score: score,
-                        device_id: deviceId
-                    }
-                ]);
+                .insert([{ room_id: currentRoomId, nickname: myMpNickname, score: score, device_id: deviceId }]);
+
+            // 2. Pobierz wyniki wszystkich graczy z tego pokoju, żeby sprawdzić, kto wygrał
+            const { data: playersData, error } = await supabaseClient
+                .from(CONFIG.SUPABASE_PLAYERS_TABLE)
+                .select('*')
+                .eq('room_id', currentRoomId);
+
+            if (!error && playersData && playersData.length > 0) {
+                // Znajdź swój wynik i najwyższy wynik przeciwnika
+                let myRecord = playersData.find(p => p.player_name === myMpNickname) || { score: score };
+                let maxScoreOther = Math.max(...playersData.map(p => p.score));
+
+                let matchStatusText = "";
+                if (myRecord.score > maxScoreOther || (playersData.length === 1 && myRecord.score >= maxScoreOther)) {
+                    matchStatusText = "🏆 WYGRANA! Jesteś najlepszy!";
+                } else if (myRecord.score === maxScoreOther) {
+                    matchStatusText = "🤝 REMIS!";
+                } else {
+                    matchStatusText = "😢 PRZEGRANA! Przeciwnik był lepszy.";
+                }
+
+                if (bonusInfoText) {
+                    bonusInfoText.innerHTML = `${bonusText}<br><strong style="font-size: 1.2rem; color: #4CAF50;">${matchStatusText}</strong>`;
+                }
+            } else {
+                if (bonusInfoText) bonusInfoText.textContent = bonusText;
+            }
+
         } catch (err) {
-            console.error('Błąd zapisu wyniku multiplayer:', err);
+            console.error('Błąd podsumowania multiplayer:', err);
+            if (bonusInfoText) bonusInfoText.textContent = bonusText;
         }
     } else {
-        const saveSection = document.querySelector('.save-score-section');
         if (saveSection) saveSection.style.display = 'block';
+        if (bonusInfoText) bonusInfoText.textContent = bonusText;
     }
   }
   
-  // --- ZAPIS WYNIKU DO SUPABASE (Tryb Solo) ---
+  // --- ZAPIS WYNIKU (Solo) ---
   if (saveScoreBtn) {
     saveScoreBtn.addEventListener('click', async () => {
         const nickname = (playerNickname ? playerNickname.value.trim() : '') || 'Kibic';
@@ -704,17 +746,14 @@ if (!window.supabaseClient) {
         try {
             const { error } = await supabaseClient
                 .from(CONFIG.SUPABASE_SCORES_TABLE)
-                .insert([
-                    {
-                        nickname: nickname,
-                        score: score,
-                        difficulty: selectedDifficulty,
-                        device_id: deviceId
-                    }
-                ]);
+                .insert([{ nickname: nickname, score: score, difficulty: selectedDifficulty, device_id: deviceId }]);
   
             if (error) throw error;
             
+            currentLbType = 'solo';
+            if (tabSoloBtn) tabSoloBtn.classList.add('active');
+            if (tabMpBtn) tabMpBtn.classList.remove('active');
+            if (soloFilters) soloFilters.style.display = 'flex';
             loadLeaderboard('all');
             showScreen(leaderboardScreen);
         } catch (err) {
@@ -730,6 +769,10 @@ if (!window.supabaseClient) {
   // --- RANKING I FILTRY ---
   if (leaderboardBtn) {
     leaderboardBtn.addEventListener('click', () => {
+        currentLbType = 'solo';
+        if (tabSoloBtn) tabSoloBtn.classList.add('active');
+        if (tabMpBtn) tabMpBtn.classList.remove('active');
+        if (soloFilters) soloFilters.style.display = 'flex';
         loadLeaderboard('all');
         showScreen(leaderboardScreen);
     });
@@ -758,6 +801,7 @@ if (!window.supabaseClient) {
     });
   });
   
+  // Ładowanie rankingu Solo
   async function loadLeaderboard(filter = 'all') {
     if (!leaderboardList) return;
     leaderboardList.innerHTML = '<p class="loading-text">Ładowanie wyników...</p>';
@@ -802,6 +846,41 @@ if (!window.supabaseClient) {
     } catch (err) {
         console.error('Błąd ładowania rankingu:', err);
         leaderboardList.innerHTML = '<p class="loading-text">Nie udało się załadować rankingu.</p>';
+    }
+  }
+
+  // Ładowanie rankingu Multiplayer
+  async function loadMpLeaderboard() {
+    if (!leaderboardList) return;
+    leaderboardList.innerHTML = '<p class="loading-text">Ładowanie rankingu Multiplayer...</p>';
+
+    try {
+        const { data, error } = await supabaseClient
+            .from(CONFIG.SUPABASE_MP_SCORES_TABLE)
+            .select('*')
+            .order('score', { ascending: false })
+            .limit(10);
+
+        if (error) throw error;
+
+        leaderboardList.innerHTML = '';
+        if (!data || data.length === 0) {
+            leaderboardList.innerHTML = '<p class="loading-text">Brak rozegranych meczów w trybie Multiplayer.</p>';
+            return;
+        }
+
+        data.forEach((entry, index) => {
+            const item = document.createElement('div');
+            item.classList.add('leaderboard-item');
+            item.innerHTML = `
+                <span>#${index + 1} <strong>${escapeHtml(entry.nickname)}</strong> <span class="lb-badge hard">MULTI</span></span>
+                <span style="text-align: right;"><strong class="lb-pts">${entry.score} pkt</strong></span>
+            `;
+            leaderboardList.appendChild(item);
+        });
+    } catch (err) {
+        console.error('Błąd ładowania rankingu MP:', err);
+        leaderboardList.innerHTML = '<p class="loading-text">Nie udało się załadować rankingu MP.</p>';
     }
   }
   
