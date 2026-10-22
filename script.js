@@ -924,24 +924,25 @@ if (!window.supabaseClient) {
         let query = supabaseClient
             .from(CONFIG.SUPABASE_SCORES_TABLE)
             .select('*')
-            .order('score', { ascending: false })
-            .limit(10);
+            .order('score', { ascending: false });
   
+        // Poprawka: Filtrowanie bezpośrednio w zapytaniu do bazy, zanim nałożymy limit 10
+        if (filter && filter !== 'all') {
+            query = query.eq('difficulty', filter);
+        }
+
+        query = query.limit(10);
+
         const { data, error } = await query;
         if (error) throw error;
   
-        let filteredData = data;
-        if (filter && filter !== 'all') {
-            filteredData = data.filter(entry => entry.difficulty && entry.difficulty.toLowerCase().trim() === filter.toLowerCase().trim());
-        }
-  
         leaderboardList.innerHTML = '';
-        if (!filteredData || filteredData.length === 0) {
+        if (!data || data.length === 0) {
             leaderboardList.innerHTML = '<p class="loading-text">Brak wyników dla tego filtra.</p>';
             return;
         }
   
-        filteredData.forEach((entry, index) => {
+        data.forEach((entry, index) => {
             const item = document.createElement('div');
             item.classList.add('leaderboard-item');
             
